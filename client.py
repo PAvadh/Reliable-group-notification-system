@@ -1,13 +1,26 @@
 import socket
 import threading
+import os
 
-from constants import ACK, ALERT, BUFFER_SIZE, CLIENT_SERVER_HOST, SERVER_PORT, SUBSCRIBE, TIMEOUT
-from packet import create_packet, parse_packet
+from constants import (
+    ACK,
+    ALERT,
+    BUFFER_SIZE,
+    CLIENT_SERVER_HOST,
+    REMOVED,
+    SERVER_PORT,
+    SUBSCRIBE,
+    TIMEOUT,
+)
+from packet import parse_packet, create_packet
 from ssl_config import encrypt_message
 
 
+# Create UDP socket
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client_socket.settimeout(TIMEOUT)
+
+# Correct server address
 server_address = (CLIENT_SERVER_HOST, SERVER_PORT)
 
 received_sequences = set()
@@ -15,18 +28,22 @@ shutdown_event = threading.Event()
 
 
 def subscribe():
-    client_socket.sendto(encrypt_message(SUBSCRIBE).encode(), server_address)
+    msg = encrypt_message(SUBSCRIBE)
+    client_socket.sendto(msg.encode(), server_address)
     print("[INFO] Subscription request sent to server")
 
 
 def leave_server():
-    client_socket.sendto(encrypt_message("LEAVE").encode(), server_address)
+    msg = encrypt_message("LEAVE")
+    client_socket.sendto(msg.encode(), server_address)
     print("[INFO] Client leaving server")
 
 
 def send_ack(seq):
+    # create_packet → plain, so encrypt manually (IMPORTANT FIX)
     ack_packet = create_packet(seq, ACK, "RECEIVED")
-    client_socket.sendto(ack_packet.encode(), server_address)
+    secure_packet = encrypt_message(ack_packet)
+    client_socket.sendto(secure_packet.encode(), server_address)
     print(f"[ACK] Sent ACK for packet {seq}")
 
 
@@ -35,6 +52,7 @@ def shutdown_client(notify_server):
         return
 
     shutdown_event.set()
+
     if notify_server:
         try:
             leave_server()
@@ -47,9 +65,21 @@ def shutdown_client(notify_server):
         pass
 
 
-def handle_packet(seq, msg_type, payload):
-    # If a duplicate arrives, ACK it and skip duplicate display.
+def handle_packet(seq, msg_type, payload, timestamp, priority):
+    # Control packets should be handled immediately even if sequence numbers repeat.
+    if msg_type == REMOVED:
+        print("\n[INFO] You have been removed by server")
+        print("[INFO] Closing client...")
+        shutdown_event.set()
+        try:
+            client_socket.close()
+        except OSError:
+            pass
+        os._exit(0)
+
+    # Duplicate detection
     if seq in received_sequences:
+        print(f"[DUPLICATE] Packet {seq} ignored")
         send_ack(seq)
         return
 
@@ -57,8 +87,9 @@ def handle_packet(seq, msg_type, payload):
 
     if msg_type == ALERT:
         print(f"[ALERT] {payload}")
+        print(f"[INFO] Priority: {priority} | Timestamp: {timestamp}")
     else:
-        print(f"[WARN] Unsupported server message type: {msg_type}")
+        print(f"[WARN] Unknown message type: {msg_type}")
 
     send_ack(seq)
 
@@ -67,16 +98,21 @@ def receive_messages():
     while not shutdown_event.is_set():
         try:
             data, _ = client_socket.recvfrom(BUFFER_SIZE)
-            seq, msg_type, payload = parse_packet(data.decode())
-            handle_packet(seq, msg_type, payload)
+
+            # ✅ FIX: decrypt + parse correctly
+            seq, msg_type, payload, timestamp, priority = parse_packet(data.decode())
+
+            handle_packet(seq, msg_type, payload, timestamp, priority)
 
         except socket.timeout:
             continue
+
         except OSError:
             if shutdown_event.is_set():
                 break
             print("[ERROR] Socket closed unexpectedly")
             break
+
         except Exception as e:
             print("[ERROR]", e)
 

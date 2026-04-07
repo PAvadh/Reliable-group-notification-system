@@ -92,7 +92,7 @@ def main():
 
     try:
         server.wait_for_text("UDP Notification Server Started")
-        server.wait_for_occurrences("Client subscribed:", 2, timeout=DEFAULT_TIMEOUT)
+        server.wait_for_occurrences("[JOIN] Client-", 2, timeout=DEFAULT_TIMEOUT)
 
         alert_message = "Smoke test alert"
         server.send_line(alert_message)

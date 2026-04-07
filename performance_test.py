@@ -1,3 +1,4 @@
+import os
 import statistics
 import time
 
@@ -9,6 +10,8 @@ from ssl_config import decrypt_message, encrypt_message
 
 ITERATIONS = 300
 WARMUP_ITERATIONS = 20
+PERF_SHARED_SECRET = "demo-shared-secret"
+os.environ.setdefault("UDP_SHARED_SECRET", PERF_SHARED_SECRET)
 
 
 def benchmark(name, func, iterations=ITERATIONS, warmup=WARMUP_ITERATIONS):
@@ -33,19 +36,36 @@ def benchmark(name, func, iterations=ITERATIONS, warmup=WARMUP_ITERATIONS):
 
 def benchmark_secure_message_round_trip():
     sample = "ALERT|Emergency notification payload for performance testing"
-    benchmark("Secure message round-trip", lambda: decrypt_message(encrypt_message(sample)), 20, 2)
+    benchmark(
+        "Secure message round-trip",
+        lambda: decrypt_message(
+            encrypt_message(sample, shared_secret=PERF_SHARED_SECRET),
+            shared_secret=PERF_SHARED_SECRET,
+        ),
+        20,
+        2,
+    )
 
 
 def benchmark_packet_round_trip():
     def run():
         packet = create_packet(25, ALERT, "Packet payload used for end-to-end parsing")
-        parse_packet(packet)
+        secure_packet = encrypt_message(packet, shared_secret=PERF_SHARED_SECRET)
+        parse_packet(secure_packet)
 
     benchmark("Encrypted packet create/parse", run, 20, 2)
 
 
 def benchmark_small_control_message():
-    benchmark("Control message crypto", lambda: decrypt_message(encrypt_message("SUB")), 20, 2)
+    benchmark(
+        "Control message crypto",
+        lambda: decrypt_message(
+            encrypt_message("SUB", shared_secret=PERF_SHARED_SECRET),
+            shared_secret=PERF_SHARED_SECRET,
+        ),
+        20,
+        2,
+    )
 
 
 def reset_client_state():
@@ -71,7 +91,7 @@ def benchmark_client_normal_handling():
             acked.clear()
 
             for seq in range(1, 201):
-                client.handle_packet(seq, ALERT, "ordered payload")
+                client.handle_packet(seq, ALERT, "ordered payload", "benchmark-ts", "NORMAL")
 
             if len(acked) != 200:
                 raise AssertionError("Client did not ACK all packets")
